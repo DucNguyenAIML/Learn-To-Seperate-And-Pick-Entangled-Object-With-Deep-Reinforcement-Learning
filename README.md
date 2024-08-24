@@ -1,1 +1,1 @@
-# Entangle-Bin-Picking-Using-Deep-Reinforcement-Learning
+# Learn To Seperate And Pick Entangled Object With Deep Reinforcement Learning
