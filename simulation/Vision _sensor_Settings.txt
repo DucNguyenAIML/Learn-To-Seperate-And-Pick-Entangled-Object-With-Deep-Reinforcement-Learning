@@ -1,0 +1,9 @@
+Vision  sensor pos (World):
+x 	-0.08032
+y 	+0.44452
+z	+0.53269
+
+Vision sensor orientation (World):
+Alpha	-174.998
+Beta	-0.449
+Gamma	-179.191
