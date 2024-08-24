@@ -37,10 +37,10 @@ def get_pointcloud(color_img, depth_img, camera_intrinsics):
     return cam_pts, rgb_pts
 
 
-def get_heightmap(color_img, depth_img, cam_intrinsics, cam_pose, mainbox_limits, heightmap_resolution):
+def get_heightmap(color_img, depth_img, cam_intrinsics, cam_pose, workspace_limits, heightmap_resolution):
 
     # Compute heightmap size
-    heightmap_size = np.round(((mainbox_limits[1][1] - mainbox_limits[1][0])/heightmap_resolution, (mainbox_limits[0][1] - mainbox_limits[0][0])/heightmap_resolution)).astype(int)
+    heightmap_size = np.round(((workspace_limits[1][1] - workspace_limits[1][0])/heightmap_resolution, (workspace_limits[0][1] - workspace_limits[0][0])/heightmap_resolution)).astype(int)
 
     # Get 3D point cloud from RGB-D images
     surface_pts, color_pts = get_pointcloud(color_img, depth_img, cam_intrinsics)
@@ -54,7 +54,7 @@ def get_heightmap(color_img, depth_img, cam_intrinsics, cam_pose, mainbox_limits
     color_pts = color_pts[sort_z_ind]
 
     # Filter out surface points outside heightmap boundaries
-    heightmap_valid_ind = np.logical_and(np.logical_and(np.logical_and(np.logical_and(surface_pts[:,0] >= mainbox_limits[0][0], surface_pts[:,0] < mainbox_limits[0][1]), surface_pts[:,1] >= mainbox_limits[1][0]), surface_pts[:,1] < mainbox_limits[1][1]), surface_pts[:,2] < mainbox_limits[2][1])
+    heightmap_valid_ind = np.logical_and(np.logical_and(np.logical_and(np.logical_and(surface_pts[:,0] >= workspace_limits[0][0], surface_pts[:,0] < workspace_limits[0][1]), surface_pts[:,1] >= workspace_limits[1][0]), surface_pts[:,1] < workspace_limits[1][1]), surface_pts[:,2] < workspace_limits[2][1])
     surface_pts = surface_pts[heightmap_valid_ind]
     color_pts = color_pts[heightmap_valid_ind]
 
@@ -63,14 +63,14 @@ def get_heightmap(color_img, depth_img, cam_intrinsics, cam_pose, mainbox_limits
     color_heightmap_g = np.zeros((heightmap_size[0], heightmap_size[1], 1), dtype=np.uint8)
     color_heightmap_b = np.zeros((heightmap_size[0], heightmap_size[1], 1), dtype=np.uint8)
     depth_heightmap = np.zeros(heightmap_size)
-    heightmap_pix_x = np.floor((surface_pts[:,0] - mainbox_limits[0][0])/heightmap_resolution).astype(int)
-    heightmap_pix_y = np.floor((surface_pts[:,1] - mainbox_limits[1][0])/heightmap_resolution).astype(int)
+    heightmap_pix_x = np.floor((surface_pts[:,0] - workspace_limits[0][0])/heightmap_resolution).astype(int)
+    heightmap_pix_y = np.floor((surface_pts[:,1] - workspace_limits[1][0])/heightmap_resolution).astype(int)
     color_heightmap_r[heightmap_pix_y,heightmap_pix_x] = color_pts[:,[0]]
     color_heightmap_g[heightmap_pix_y,heightmap_pix_x] = color_pts[:,[1]]
     color_heightmap_b[heightmap_pix_y,heightmap_pix_x] = color_pts[:,[2]]
     color_heightmap = np.concatenate((color_heightmap_r, color_heightmap_g, color_heightmap_b), axis=2)
     depth_heightmap[heightmap_pix_y,heightmap_pix_x] = surface_pts[:,2]
-    z_bottom = mainbox_limits[2][0]
+    z_bottom = workspace_limits[2][0]
     depth_heightmap = depth_heightmap - z_bottom
     depth_heightmap[depth_heightmap < 0] = 0
     depth_heightmap[depth_heightmap == -z_bottom] = np.nan

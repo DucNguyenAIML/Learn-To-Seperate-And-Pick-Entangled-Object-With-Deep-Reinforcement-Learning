@@ -74,11 +74,11 @@ class Logger():
         depth_heightmap = np.round(depth_heightmap * 100000).astype(np.uint16) # Save depth in 1e-5 meters
         cv2.imwrite(os.path.join(self.depth_heightmaps_directory, '%06d.%s.depth.png' % (iteration, mode)), depth_heightmap)
     
-    def save_heightmaps_after_grasp(self, iteration, color_heightmap, depth_heightmap, mode):
-        depth_heightmap = np.round(depth_heightmap * 100000).astype(np.uint16) # Save depth in 1e-5 meters
+    def save_heightmaps_after_grasp(self, iteration, aftergrasp_color_heightmap, aftergrasp_depth_heightmap, mode):
+        aftergrasp_depth_heightmap = np.round(aftergrasp_depth_heightmap * 100000).astype(np.uint16) # Save depth in 1e-5 meters
         #src_folder = os.path.join(self.base_directory, 'data', 'depth-heightmaps')
         src_folder = os.path.abspath('heightmap_diff')
-        cv2.imwrite(os.path.join(src_folder, '%06d.%s.depth.png' % (iteration + 1, mode)), depth_heightmap)
+        cv2.imwrite(os.path.join(src_folder, '%06d.%s.depth_aftergrasp.png' % (iteration + 1, mode)), aftergrasp_depth_heightmap)
     
     def write_to_log(self, log_name, log):
         np.savetxt(os.path.join(self.transitions_directory, '%s.log.txt' % log_name), log, delimiter=' ')

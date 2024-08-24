@@ -9,14 +9,17 @@ from zmqRemoteApi import RemoteAPIClient
 from logger import Logger
 
 class Robot(object):
-    def __init__(self, is_sim, obj_mesh_dir, num_obj, mainbox_limits, tcp_host_ip,
-                 tcp_port, rtc_host_ip, rtc_port, is_testing,
+    def __init__(self, is_sim, obj_mesh_dir, num_obj, mainbox_limits, bufferbox_limits,
+                 tcp_host_ip, tcp_port, rtc_host_ip, rtc_port, is_testing,
                  test_preset_cases, test_preset_file):
         self.is_sim = is_sim
         self.mainbox_limits = mainbox_limits
-        #self.buffer_limits = bufferbox_limits
+        self.buffer_limits = bufferbox_limits
         #self.final_limits = finalbox_limits
-        
+        self.main_workspace = True              # main_workspace = True -> Robot working in main bin
+                                                # main_workspace = False -> Robot working in buffer bin
+        self.set_new_home = False
+
         if self.is_sim == True:
             # Define colors for object meshes (Tableau palette)
             # Quick hack for reuse Andy's code xD
@@ -67,7 +70,8 @@ class Robot(object):
             self.test_preset_file = test_preset_file
 
             # Setup virtual camera in simulation
-            self.setup_sim_camera()
+            self.setup_sim_camera_main()
+            self.setup_sim_camera_buffer()
 
             # If testing, read object meshes and poses from test case file
             if self.is_testing and self.test_preset_cases:
@@ -92,43 +96,41 @@ class Robot(object):
         elif self.is_sim == False:
             print("Not in simulation mode, exit!")
 
-
-    def setup_sim_camera(self):
+    def setup_sim_camera_main(self):
         # Get handle to camera
-        self.cam_handle = self.sim_sim.getObject('/Vision_sensor_persp')
+        self.cam_handle_main = self.sim_sim.getObject('/Vision_main')
         # Get camera pose and intrinsics in simulation
-        cam_position = self.sim_sim.getObjectPosition(self.cam_handle, -1)
-        cam_orientation = self.sim_sim.getObjectOrientation(self.cam_handle, -1)
-        cam_trans = np.eye(4, 4)
-        cam_trans[0:3, 3] = np.asarray(cam_position)
-        cam_orientation = [-cam_orientation[0], -cam_orientation[1], -cam_orientation[2]]
-        cam_rotm = np.eye(4, 4)
-        cam_rotm[0:3, 0:3] = np.linalg.inv(utils.euler2rotm(cam_orientation))
-        self.cam_pose = np.dot(cam_trans, cam_rotm)  # Compute rigid transformation representing camera pose
-        self.cam_intrinsics = np.asarray([[618.62, 0, 320], [0, 618.62, 240], [0, 0, 1]])
-        self.cam_depth_scale = 1
+        cam_position_main = self.sim_sim.getObjectPosition(self.cam_handle_main, -1)
+        cam_orientation_main = self.sim_sim.getObjectOrientation(self.cam_handle_main, -1)
+        cam_trans_main = np.eye(4, 4)
+        cam_trans_main[0:3, 3] = np.asarray(cam_position_main)
+        cam_orientation_main = [-cam_orientation_main[0], -cam_orientation_main[1], -cam_orientation_main[2]]
+        cam_rotm_main = np.eye(4, 4)
+        cam_rotm_main[0:3, 0:3] = np.linalg.inv(utils.euler2rotm(cam_orientation_main))
+        self.cam_pose_main = np.dot(cam_trans_main, cam_rotm_main)  # Compute rigid transformation representing camera pose
+        self.cam_intrinsics_main = np.asarray([[618.62, 0, 320], [0, 618.62, 240], [0, 0, 1]])
+        self.cam_depth_scale_main = 1
         # Get background image
-        self.bg_color_img, self.bg_depth_img = self.get_camera_data()
-        self.bg_depth_img = self.bg_depth_img * self.cam_depth_scale
-
-
-    def setup_3d_scanner(self):
+        self.bg_color_img_main, self.bg_depth_img_main = self.get_camera_data_main()
+        self.bg_depth_img_main = self.bg_depth_img_main * self.cam_depth_scale_main
+        
+    def setup_sim_camera_buffer(self):
         # Get handle to camera
-        self.scanner_handle = self.sim_sim.getObject('/3D_Scanner')
+        self.cam_handle_buffer = self.sim_sim.getObject('/Vision_buffer')
         # Get camera pose and intrinsics in simulation
-        scanner_position = self.sim_sim.getObjectPosition(self.scanner_handle, -1)
-        scanner_orientation = self.sim_sim.getObjectOrientation(self.scanner_handle, -1)
-        scanner_trans = np.eye(4, 4)
-        scanner_trans[0:3, 3] = np.asarray(scanner_position)
-        scanner_orientation = [-scanner_orientation[0], -scanner_orientation[1], -scanner_orientation[2]]
-        scanner_rotm = np.eye(4, 4)
-        scanner_rotm[0:3, 0:3] = np.linalg.inv(utils.euler2rotm(scanner_orientation))
-        self.scanner_pose = np.dot(scanner_trans, scanner_rotm)  # Compute rigid transformation representing camera pose
-        self.scanner_intrinsics = np.asarray([[618.62, 0, 320], [0, 618.62, 240], [0, 0, 1]])
-        self.scanner_depth_scale = 1
+        cam_position_buffer = self.sim_sim.getObjectPosition(self.cam_handle_buffer, -1)
+        cam_orientation_buffer = self.sim_sim.getObjectOrientation(self.cam_handle_buffer, -1)
+        cam_trans_buffer = np.eye(4, 4)
+        cam_trans_buffer[0:3, 3] = np.asarray(cam_position_buffer)
+        cam_orientation_buffer = [-cam_orientation_buffer[0], -cam_orientation_buffer[1], -cam_orientation_buffer[2]]
+        cam_rotm_buffer = np.eye(4, 4)
+        cam_rotm_buffer[0:3, 0:3] = np.linalg.inv(utils.euler2rotm(cam_orientation_buffer))
+        self.cam_pose_buffer = np.dot(cam_trans_buffer, cam_rotm_buffer)  # Compute rigid transformation representing camera pose
+        self.cam_intrinsics_buffer = np.asarray([[618.62, 0, 320], [0, 618.62, 240], [0, 0, 1]])
+        self.cam_depth_scale_buffer = 1
         # Get background image
-        self.scanner_bg_color_img, self.scanner_bg_depth_img = self.get_camera_data()
-        self.scanner_bg_depth_img = self.scanner_bg_depth_img * self.scanner_depth_scale
+        self.bg_color_img_buffer, self.bg_depth_img_buffer = self.get_camera_data_buffer()
+        self.bg_depth_img_buffer = self.bg_depth_img_buffer * self.cam_depth_scale_buffer
 
 
     def add_objects(self):
@@ -159,19 +161,17 @@ class Robot(object):
             # print(script_object_handle)
             script_handle = self.sim_sim.getScript(1, script_object_handle, '/remoteApiCommandServer')
             # print(f"Script handle {script_handle}")
-            time.sleep(2)
+            #time.sleep(0.5)
             ret_ints, ret_floats, ret_strings, ret_buffer = self.sim_sim.callScriptFunction('importShape',
                                                                                             script_handle,
                                                                                             [0, 0, 255, 0],
                                                                                             object_position + object_orientation + object_color,
                                                                                             [curr_mesh_file,
                                                                                              curr_shape_name])
-            print("Object position is: ", object_position)
-
             curr_shape_handle = ret_ints[0]
             self.object_handles.append(curr_shape_handle)
-            if not (self.is_testing and self.test_preset_cases):
-                time.sleep(2)
+            # if not (self.is_testing and self.test_preset_cases):
+            #     time.sleep(0.5)
         self.prev_obj_positions = []
         self.obj_positions = []
 
@@ -183,12 +183,17 @@ class Robot(object):
         self.sim_sim.stopSimulation()
 
         # Set Pos and Ori for main target
-        self.sim_sim.setObjectPosition(self.UR5_target_handle, -1, (-0.1088, +0.57714, +0.53764))
-        self.sim_sim.setObjectOrientation(self.UR5_target_handle, -1, (0 * np.pi/180, -90 * np.pi/180, -33.999 * np.pi/180))
-
+        self.sim_sim.setObjectPosition(self.UR5_target_handle, -1, (-0.3, +0.45, +0.3))
+        self.get_heightmap_position_main = self.sim_sim.getObjectPosition(self.UR5_target_handle, -1)
+        self.sim_sim.setObjectOrientation(self.UR5_target_handle, -1, (+90 * np.pi/180, -22.5 * np.pi/180, +90 * np.pi/180))
+        self.get_heightmap_orientation_main = self.sim_sim.getObjectOrientation(self.UR5_target_handle, -1)
         # Set Pos and Ori for buffer target
-        #self.sim_sim.setObjectPosition(self.UR5_buffer_handle, -1, (-0.57714, -0.1088, +0.53764))
-        #self.sim_sim.setObjectOrientation(self.UR5_buffer_handle, -1, (+90 * np.pi/180, 0 * np.pi/180, 56.001 * np.pi/180))
+        self.sim_sim.setObjectPosition(self.UR5_buffer_handle, -1, (+0.3, +0.45, +0.3))
+        self.sim_sim.setObjectOrientation(self.UR5_buffer_handle, -1, (+90 * np.pi/180, -22.5 * np.pi/180, +90 * np.pi/180))
+        
+        self.home_main_pos = self.sim_sim.getObjectPosition(self.UR5_target_handle, -1)
+        self.home_buffer_pos = self.sim_sim.getObjectPosition(self.UR5_buffer_handle, -1)
+
         self.sim_sim.startSimulation()
 
         time.sleep(1)
@@ -211,11 +216,13 @@ class Robot(object):
         rad2 = (((gripper_position[0] - UR5_workspace[0]) * (gripper_position[0] - UR5_workspace[0])) + 
                 ((gripper_position[1] - UR5_workspace[1]) * (gripper_position[1] - UR5_workspace[1])) + 
                 ((gripper_position[2] - UR5_workspace[2]) * (gripper_position[2] - UR5_workspace[2])))
+        print("rad2: ", rad2)
+        print("z gripper pos is: ", gripper_position[2])
         # sim_ok = gripper_position[0] > mainbox_limits[0][0] - 0.1 and gripper_position[0] < \
         #              mainbox_limits[0][1] + 0.1 and gripper_position[1] > mainbox_limits[1][0] - 0.1 and \
         #              gripper_position[1] < mainbox_limits[1][1] + 0.1 and gripper_position[2] > \
         #              mainbox_limits[2][0] and gripper_position[2] < mainbox_limits[2][1]
-        if rad2 <= (1.7 * 1.7) and gripper_position[2] > 0.1:
+        if rad2 <= (1.7 * 1.7) and gripper_position[2] > 0.0001 and gripper_position[2] < 0.6:
             sim_ok = True
             print("The gripper is in workspace")
         else:
@@ -225,7 +232,8 @@ class Robot(object):
             print('Simulation unstable. Restarting environment.')
             self.restart_sim()
             self.add_objects()
-    
+
+
     
     def get_object_position(self):
         obj_positions = []
@@ -236,61 +244,143 @@ class Robot(object):
         return obj_positions
     
     
-    def get_camera_data(self):
+    # # Determine whether the tip is in main or buffer
+    # def main_or_buffer(self):
+    #     UR5_tip = self.sim_sim.self.sim_sim.getObjectPosition('/UR5_tip', -1)
+    #     UR5_main_target = self.sim_sim.getObjectPosition('/UR5_main_target', -1)
+    #     UR5_buffer_target = self.sim_sim.getObjectPosition('/UR5_buffer_target', -1)
+
+    # Get camera data of main workspace
+    def get_camera_data_main(self):
         
         if self.is_sim == True:
 
             # Get color image from simulation
-            raw_image, resolution = self.sim_sim.getVisionSensorImg(self.cam_handle, 0)
-            count = len(raw_image)
-            raw_image = struct.unpack("B" * int(count), raw_image)
-            color_img = np.asarray(raw_image)
-            color_img.shape = (resolution[1], resolution[0], 3)
-            color_img = color_img.astype(np.float64) / 255
-            color_img[color_img < 0] += 1
-            color_img *= 255
-            color_img = np.fliplr(color_img)
-            color_img = color_img.astype(np.uint8)
+            raw_image_main, resolution = self.sim_sim.getVisionSensorImg(self.cam_handle_main, 0)
+            count_main = len(raw_image_main)
+            raw_image_main = struct.unpack("B" * int(count_main), raw_image_main)
+            color_img_main = np.asarray(raw_image_main)
+            color_img_main.shape = (resolution[1], resolution[0], 3)
+            color_img_main = color_img_main.astype(np.float64) / 255
+            color_img_main[color_img_main < 0] += 1
+            color_img_main *= 255
+            color_img_main = np.fliplr(color_img_main)
+            color_img_main = color_img_main.astype(np.uint8)
 
             # Get depth image from simulation
-            depth_buffer, resolution = self.sim_sim.getVisionSensorDepth(self.cam_handle)
+            depth_buffer, resolution = self.sim_sim.getVisionSensorDepth(self.cam_handle_main)
             count = len(depth_buffer) / 4
             depth_buffer = struct.unpack("f" * int(count), depth_buffer)
-            depth_img = np.asarray(depth_buffer)
-            depth_img.shape = (resolution[1], resolution[0])
-            depth_img = np.fliplr(depth_img)
+            depth_img_main = np.asarray(depth_buffer)
+            depth_img_main.shape = (resolution[1], resolution[0])
+            depth_img_main = np.fliplr(depth_img_main)
             zNear = 0.01
             zFar = 10
-            depth_img = depth_img * (zFar - zNear) + zNear
+            depth_img_main = depth_img_main * (zFar - zNear) + zNear
         
         else:
             print("Camera/Scanner not in simulation mode, please try again")
         
-        return color_img, depth_img
+        return color_img_main, depth_img_main
     
+    # get camera data of buffer workspace:
+    def get_camera_data_buffer(self):
+        
+        if self.is_sim == True:
+
+            # Get color image from simulation
+            raw_image_buffer, resolution = self.sim_sim.getVisionSensorImg(self.cam_handle_buffer, 0)
+            count_buffer = len(raw_image_buffer)
+            raw_image_buffer = struct.unpack("B" * int(count_buffer), raw_image_buffer)
+            color_img_buffer = np.asarray(raw_image_buffer)
+            color_img_buffer.shape = (resolution[1], resolution[0], 3)
+            color_img_buffer = color_img_buffer.astype(np.float64) / 255
+            color_img_buffer[color_img_buffer < 0] += 1
+            color_img_buffer *= 255
+            color_img_buffer = np.fliplr(color_img_buffer)
+            color_img_buffer = color_img_buffer.astype(np.uint8)
+
+            # Get depth image from simulation
+            depth_buffer, resolution = self.sim_sim.getVisionSensorDepth(self.cam_handle_buffer)
+            count = len(depth_buffer) / 4
+            depth_buffer = struct.unpack("f" * int(count), depth_buffer)
+            depth_img_buffer = np.asarray(depth_buffer)
+            depth_img_buffer.shape = (resolution[1], resolution[0])
+            depth_img_buffer = np.fliplr(depth_img_buffer)
+            zNear = 0.01
+            zFar = 10
+            depth_img_buffer = depth_img_buffer * (zFar - zNear) + zNear
+        
+        else:
+            print("Camera/Scanner not in simulation mode, please try again")
+        
+        return color_img_buffer, depth_img_buffer
+
+
+    # def close_gripper(self):
+        
+    #     if self.is_sim == True:
+    #         gripper_motor_velocity = -0.5
+    #         gripper_motor_force = 100
+    #         RG2_gripper_handle = self.sim_sim.getObject('/openCloseJoint')
+    #         gripper_joint_position = self.sim_sim.getJointPosition(RG2_gripper_handle)
+    #         self.sim_sim.setJointTargetForce(RG2_gripper_handle, gripper_motor_force)
+    #         self.sim_sim.setJointTargetVelocity(RG2_gripper_handle, gripper_motor_velocity)
+    #         gripper_fully_closed = False
+    #         while gripper_joint_position > -0.045:  # Block until gripper is fully closed
+    #             new_gripper_joint_position = self.sim_sim.getJointPosition(RG2_gripper_handle)
+    #             if new_gripper_joint_position >= gripper_joint_position:
+    #                 return gripper_fully_closed
+    #             gripper_joint_position = new_gripper_joint_position
+    #         gripper_fully_closed = True
+    #         return gripper_fully_closed
+        
+    #     else:
+    #         print("Not in simulation mode, cannot close gripper")
 
     def close_gripper(self):
-        
         if self.is_sim == True:
             gripper_motor_velocity = -0.5
             gripper_motor_force = 100
             RG2_gripper_handle = self.sim_sim.getObject('/openCloseJoint')
-            gripper_joint_position = self.sim_sim.getJointPosition(RG2_gripper_handle)
+            self.gripper_joint_position = self.sim_sim.getJointPosition(RG2_gripper_handle)
             self.sim_sim.setJointTargetForce(RG2_gripper_handle, gripper_motor_force)
             self.sim_sim.setJointTargetVelocity(RG2_gripper_handle, gripper_motor_velocity)
             gripper_fully_closed = False
-            while gripper_joint_position > -0.045:  # Block until gripper is fully closed
+            while self.gripper_joint_position > -0.045:  # Block until gripper is fully closed
                 new_gripper_joint_position = self.sim_sim.getJointPosition(RG2_gripper_handle)
-                # print(gripper_joint_position)
-                if new_gripper_joint_position >= gripper_joint_position:
+                if new_gripper_joint_position >= self.gripper_joint_position:
                     return gripper_fully_closed
-                gripper_joint_position = new_gripper_joint_position
+                self.gripper_joint_position = new_gripper_joint_position
             gripper_fully_closed = True
+            return gripper_fully_closed
         
         else:
             print("Not in simulation mode, cannot close gripper")
 
-    
+
+    def check_closed_gripper(self):
+        ############# Old Method ##########################
+        # RG2_gripper_handle = self.sim_sim.getObject('/openCloseJoint')
+        # new_gripper_joint_position = self.sim_sim.getJointPosition(RG2_gripper_handle)
+        # if new_gripper_joint_position >= self.gripper_joint_position:
+        #     return False
+        # else:
+        #     return True
+
+        ############################# New method: Use Force Sensor ##############################
+        # Read the force sensor and take the Z dimension value
+        # If grasp successfully, the Z dimension force of gravity will increase
+        force_sensor = self.sim_sim.getObject('/leftForceSensor')
+        result, forceVector, torqueVector = self.sim_sim.readForceSensor(force_sensor)
+        print("Force sensor value z-dimension: ", forceVector[2])
+        if forceVector[2] <= -50:
+            return False
+        else:
+            return True
+        
+
+
     def open_gripper(self):
 
         if self.is_sim == True:
@@ -308,18 +398,16 @@ class Robot(object):
     
 
     def move_to(self, tool_position, tool_orientation):
-
+        
         if self.is_sim == True:
-            # self.UR5_target_handle = self.sim_sim.getObject('/UR5_main_target')
             UR5_target_position = self.sim_sim.getObjectPosition(self.UR5_target_handle, -1)
-            self.get_heightmap_position_main = UR5_target_position  # Save location for robot return to get heightmap after each action in main bin
+
             move_direction = np.asarray(
                 [tool_position[0] - UR5_target_position[0], tool_position[1] - UR5_target_position[1],
-                 tool_position[2] - UR5_target_position[2]])
-                # distance = tool position - ur5 main target
+                tool_position[2] - UR5_target_position[2]])
             move_magnitude = np.linalg.norm(move_direction)
-            move_step = 0.02 * move_direction / move_magnitude
-            num_move_steps = int(np.floor(move_magnitude / 0.02))
+            move_step = 0.02 * move_direction / move_magnitude      # Edit: 0.02 -> 0.005
+            num_move_steps = int(np.floor(move_magnitude / 0.02))   # Edit: 0.02 -> 0.005
 
             for step_iter in range(num_move_steps):
                 self.sim_sim.setObjectPosition(self.UR5_target_handle, -1, (
@@ -327,12 +415,13 @@ class Robot(object):
                 UR5_target_position[2] + move_step[2]))
                 UR5_target_position = self.sim_sim.getObjectPosition(self.UR5_target_handle, -1)
             self.sim_sim.setObjectPosition(self.UR5_target_handle, -1,
-                                           (tool_position[0], tool_position[1], tool_position[2]))
+                                        (tool_position[0], tool_position[1], tool_position[2]))
             
+            print("New position of Target is: ", [tool_position[0], tool_position[1], tool_position[2]])
         else:
             print("Not in simulation mode at function move_to")
 
-    
+
     def grasp(self, position, heightmap_rotation_angle, mainbox_limits):
         print('Executing: grasp at (%f, %f, %f)' % (position[0], position[1], position[2]))
 
@@ -354,9 +443,13 @@ class Robot(object):
             move_direction = np.asarray(
                 [tool_position[0] - UR5_target_position[0], tool_position[1] - UR5_target_position[1],
                  tool_position[2] - UR5_target_position[2]])
+            #print("move_direction: ", move_direction)
             move_magnitude = np.linalg.norm(move_direction)
+            #print("move_magnitude: ", move_magnitude)
             move_step = 0.05 * move_direction / move_magnitude
+            #print("move_step: ", move_step[0])
             num_move_steps = int(np.floor(move_direction[0] / move_step[0]))
+            #print("num_move_step: ", num_move_steps)
 
             # Compute gripper orientation and rotation increments
             gripper_orientation = self.sim_sim.getObjectOrientation(self.UR5_target_handle, -1)
@@ -387,19 +480,39 @@ class Robot(object):
             # Close gripper to grasp target
             print("Close gripper to grasp target")
             gripper_full_closed = self.close_gripper()
-
+            time.sleep(2)
             # Move gripper to location above grasp target
             # self.move_to(location_above_grasp_target, None)
-
-            # Move back to location get heightmap: (Not complete - Build for Mainbox only)
-            self.move_to([UR5_target_position[0], UR5_target_position[1], UR5_target_position[2]], None)
+            if self.main_workspace == True:
+                #self.move_to([-0.3, +0.45, +0.3], None)
+                self.move_to([-0.3, +0.25, +0.4], None)
+            elif self.main_workspace == False:
+                self.move_to(self.home_buffer_pos, None)
+            time.sleep(2)
 
             # Check if grasp is successful
-            gripper_full_closed = self.close_gripper()
-            grasp_success = not gripper_full_closed     # if gripper is fully close, then it's not a successful grasp.
+            gripper_full_closed = self.check_closed_gripper()
+            self.grasp_success = not gripper_full_closed     # if gripper is fully close, then it's not a successful grasp.
 
-            # Move the grasped object elsewhere
-            if grasp_success:
+            grasp_success = self.grasp_success
+            # Move the grasped object elsewhere:
+                # object_positions = np.asarray(self.get_obj_positions())
+                # object_positions = object_positions[:, 2]
+                # grasped_object_ind = np.argmax(object_positions)
+                # grasped_object_handle = self.object_handles[grasped_object_ind]
+                # self.sim_sim.setObjectPosition(grasped_object_handle, -1,
+                #                                (-0.5, 0.5 + 0.05 * float(grasped_object_ind), 0.1))
+            print("grasp_success = ", grasp_success)
+            print("gripper fully close = ", gripper_full_closed)
+            return grasp_success
+        else:
+            print("In real setting mode, please try again")
+
+
+    def process_after_grasp(self):
+         if (self.grasp_success == True) and (self.main_workspace == True):
+                
+                ################################# Threshold way - Bad behavior !!!! ######################
                 # Get path of before heightmap_diff folder and name of heightmap inside
                 heightmap_diff_folder = os.path.abspath('heightmap_diff')
                 name_heightmap_before_grasp, name_heightmap_after_grasp = os.listdir(heightmap_diff_folder)
@@ -413,26 +526,19 @@ class Robot(object):
                 heightmap_after_grasp = np.asmatrix(heightmap_after_grasp)
 
                 # Calculate the Threshold
-                threshold_grasp = heightmap_before_grasp - heightmap_after_grasp
-                
-                # if grasp 2 or more tangled objects, then move to the buffer bin and drop
-                # if threshold_grasp >= x then:
-                self.move_to(self.UR5_buffer_handle)
-                self.open_gripper()
+                self.threshold_grasp = np.matrix.sum(heightmap_before_grasp) - np.matrix.sum(heightmap_after_grasp)
+                print("Diff value: ", self.threshold_grasp)
 
-                # if grasp only 1 object, then move to the result bin and drop
-                # (Do something here)
+                # Delete the old heightmaps:
+                # Turn on after check folder
+                os.remove(os.path.join(heightmap_diff_folder, name_heightmap_before_grasp))
+                os.remove(os.path.join(heightmap_diff_folder, name_heightmap_after_grasp))
+                #################################### Force Torque Sensor Way ####################################
+                # This method uses force sensor as a "weight sensor", measure the diff of mass between grasp 1 and 2 objects
+                # (mass of grasp 2 is > 1)
+                self.weightSensor = self.sim_sim.getObject('/connection')
+                self.bit, self.weightVector, _ = self.sim_sim.readForceSensor(self.weightSensor)
 
-                # object_positions = np.asarray(self.get_obj_positions())
-                # object_positions = object_positions[:, 2]
-                # grasped_object_ind = np.argmax(object_positions)
-                # grasped_object_handle = self.object_handles[grasped_object_ind]
-                # self.sim_sim.setObjectPosition(grasped_object_handle, -1,
-                #                                (-0.5, 0.5 + 0.05 * float(grasped_object_ind), 0.1))
-        else:
-            print("In real setting mode, please try again")
-
-    
     def push(self, position, heightmap_rotation_angle, mainbox_limits):
         print('Executing: push at (%f, %f, %f)' % (position[0], position[1], position[2]))
 
@@ -500,11 +606,18 @@ class Robot(object):
             self.move_to([target_x, target_y, position[2]], None)
 
             # Move gripper to location above grasp target
-            # self.move_to([target_x, target_y, location_above_pushing_point[2]], None)
-
-            # Move back to location get heightmap: (Not complete - Build for Mainbox only)
-            self.move_to(self.get_heightmap_position_main, None)
+            self.move_to([target_x, target_y, location_above_pushing_point[2]], None)
 
             push_success = True
         else:
             print("In real setting mode, please try again")
+
+    def move_to_main(self):
+        self.move_to(self.home_main_pos, None)
+
+    def move_to_buffer(self):
+        self.move_to(self.home_buffer_pos, None)
+
+    def move_to_final(self):
+        final_box_center = np.array([+0.45, -0.25, 0.3])
+        self.move_to(final_box_center, None)

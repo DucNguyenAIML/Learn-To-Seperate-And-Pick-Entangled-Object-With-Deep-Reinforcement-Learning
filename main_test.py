@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import time
 import os
 import random
@@ -30,8 +29,8 @@ def main(args):
     rtc_host_ip = args.rtc_host_ip if not is_sim else None # IP and port to robot arm as real-time client (UR5)
     rtc_port = args.rtc_port if not is_sim else None
     if is_sim == True:
-        mainbox_limits = np.asarray([[-0.324, 0.124], [0.276, 0.724], [-0.0001, 0.6]]) # Cols: min max, Rows: x y z (define workspace limits in robot coordinates)
-        # bufferbox_limits = np.asarray([[-0.738, -0.228], [-0.309, 0.201], [-0.0001, 0.6]])
+        bufferbox_limits = np.asarray([[0.076, 0.524], [0.226, 0.674], [+0.0001, 0.6]]) # Cols: min max, Rows: x y z (define workspace limits in robot coordinates)
+        mainbox_limits = np.asarray([[-0.524, -0.076], [0.226, 0.674], [-0.0001, 0.6]])
         # finalbox_limits = np.asarray([[-0.305, 0.205], [-0.73, -0.22], [-0.0001, 0.6]])
     else:
         # mainbox_limits = np.asarray([[0.3, 0.748], [-0.224, 0.224], [-0.255, -0.1]]) # Cols: min max, Rows: x y z (define workspace limits in robot coordinates)
@@ -72,8 +71,8 @@ def main(args):
     #               tcp_port, rtc_host_ip, rtc_port, is_testing,
     #               test_preset_cases, test_preset_file)
     
-    robot = Robot(is_sim, obj_mesh_dir, num_obj, mainbox_limits, tcp_host_ip, 
-                  tcp_port, rtc_host_ip, rtc_port, is_testing,
+    robot = Robot(is_sim, obj_mesh_dir, num_obj, mainbox_limits, bufferbox_limits,
+                  tcp_host_ip, tcp_port, rtc_host_ip, rtc_port, is_testing,
                   test_preset_cases, test_preset_file)
 
     # Initialize trainer
@@ -82,8 +81,8 @@ def main(args):
 
     # Initialize data logger
     logger = Logger(continue_logging, logging_directory)
-    logger.save_camera_info(robot.cam_intrinsics, robot.cam_pose, robot.cam_depth_scale) # Save camera intrinsics and pose
-    logger.save_heightmap_info(mainbox_limits, heightmap_resolution) # Save heightmap parameters
+    # logger.save_camera_info(robot.cam_intrinsics, robot.cam_pose, robot.cam_depth_scale) # Save camera intrinsics and pose
+    # logger.save_heightmap_info(mainbox_limits, heightmap_resolution) # Save heightmap parameters
 
     # Find last executed iteration of pre-loaded log, and load execution info and RL variables
     if continue_logging:
@@ -98,7 +97,8 @@ def main(args):
                           'primitive_action' : None,
                           'best_pix_ind' : None,
                           'push_success' : False,
-                          'grasp_success' : False}
+                          'grasp_success' : False,
+                          'main_or_buffer' : True}  # If true, the robot execute action in main bin. If False -> The robot execute action in Buffer bin
 
 
     # Parallel thread to process network output and execute actions
@@ -106,7 +106,16 @@ def main(args):
     def process_actions():
         while True:
             if nonlocal_variables['executing_action'] == True:
-
+                # If in main workspace, process with grasp only mode
+                if nonlocal_variables['main_or_buffer'] == True:
+                    print("Working in main workspace, process with grasping mode")
+                    grasp_only = True
+                    time.sleep(2)
+                # If in buffer workspace, process grasp & push mode
+                elif nonlocal_variables['main_or_buffer'] == False:
+                    print("Working in buffer workspace, process with pushing and grasping mode")
+                    grasp_only = False
+                    time.sleep(2)
                 # Determine whether grasping or pushing should be executed based on network predictions
                 best_push_conf = np.max(push_predictions)
                 best_grasp_conf = np.max(grasp_predictions)
@@ -165,17 +174,27 @@ def main(args):
                 best_rotation_angle = np.deg2rad(nonlocal_variables['best_pix_ind'][0]*(360.0/trainer.model.num_rotations))
                 best_pix_x = nonlocal_variables['best_pix_ind'][2]
                 best_pix_y = nonlocal_variables['best_pix_ind'][1]
-                primitive_position = [best_pix_x * heightmap_resolution + mainbox_limits[0][0], best_pix_y * heightmap_resolution + mainbox_limits[1][0], valid_depth_heightmap[best_pix_y][best_pix_x] + mainbox_limits[2][0]]
-
+                if nonlocal_variables['main_or_buffer'] == True:
+                    primitive_position = [best_pix_x * heightmap_resolution + mainbox_limits[0][0], best_pix_y * heightmap_resolution + mainbox_limits[1][0], valid_depth_heightmap[best_pix_y][best_pix_x] + mainbox_limits[2][0]]
+                elif nonlocal_variables['main_or_buffer'] == False:
+                    primitive_position = [best_pix_x * heightmap_resolution + bufferbox_limits[0][0], best_pix_y * heightmap_resolution + bufferbox_limits[1][0], valid_depth_heightmap[best_pix_y][best_pix_x] + bufferbox_limits[2][0]]
+                
                 # If pushing, adjust start position, and make sure z value is safe and not too low
                 if nonlocal_variables['primitive_action'] == 'push': # or nonlocal_variables['primitive_action'] == 'place':
                     finger_width = 0.02
                     safe_kernel_width = int(np.round((finger_width/2)/heightmap_resolution))
                     local_region = valid_depth_heightmap[max(best_pix_y - safe_kernel_width, 0):min(best_pix_y + safe_kernel_width + 1, valid_depth_heightmap.shape[0]), max(best_pix_x - safe_kernel_width, 0):min(best_pix_x + safe_kernel_width + 1, valid_depth_heightmap.shape[1])]
-                    if local_region.size == 0:
-                        safe_z_position = mainbox_limits[2][0]
-                    else:
-                        safe_z_position = np.max(local_region) + mainbox_limits[2][0]
+                    if nonlocal_variables['main_or_buffer'] == True:
+                        if local_region.size == 0:
+                            safe_z_position = mainbox_limits[2][0]
+                        else:
+                            safe_z_position = np.max(local_region) + mainbox_limits[2][0]
+                    
+                    elif nonlocal_variables['main_or_buffer'] == False:
+                        if local_region.size == 0:
+                            safe_z_position = bufferbox_limits[2][0]
+                        else:
+                            safe_z_position = np.max(local_region) + bufferbox_limits[2][0]
                     primitive_position[2] = safe_z_position
 
                 # Save executed primitive
@@ -200,21 +219,90 @@ def main(args):
                 change_detected = False
 
                 # Execute primitive
-                if nonlocal_variables['primitive_action'] == 'push':
-                    nonlocal_variables['push_success'] = robot.push(primitive_position, best_rotation_angle, mainbox_limits)
-                    print('Push successful: %r' % (nonlocal_variables['push_success']))
-                elif nonlocal_variables['primitive_action'] == 'grasp':
-                    nonlocal_variables['grasp_success'] = robot.grasp(primitive_position, best_rotation_angle, mainbox_limits)
-                    print('Grasp successful: %r' % (nonlocal_variables['grasp_success']))
+                if nonlocal_variables['main_or_buffer'] == True:
+                    if nonlocal_variables['primitive_action'] == 'push':
+                        nonlocal_variables['push_success'] = robot.push(primitive_position, best_rotation_angle, mainbox_limits)
+                        print('Push successful: %r' % (nonlocal_variables['push_success']))
+                    elif nonlocal_variables['primitive_action'] == 'grasp':
+                        nonlocal_variables['grasp_success'] = robot.grasp(primitive_position, best_rotation_angle, mainbox_limits)
+                        print('Grasp successful: %r' % (nonlocal_variables['grasp_success']))
+                elif nonlocal_variables['main_or_buffer'] == False:
+                    if nonlocal_variables['primitive_action'] == 'push':
+                        nonlocal_variables['push_success'] = robot.push(primitive_position, best_rotation_angle, bufferbox_limits)
+                        print('Push successful: %r' % (nonlocal_variables['push_success']))
+                    elif nonlocal_variables['primitive_action'] == 'grasp':
+                        nonlocal_variables['grasp_success'] = robot.grasp(primitive_position, best_rotation_angle, bufferbox_limits)
+                        print('Grasp successful: %r' % (nonlocal_variables['grasp_success']))
 
-                    if nonlocal_variables['grasp_success'] == True:
-                        dst_folder = os.path.abspath('heightmap_diff')
-                        logger.copy_recent_heightmap(dst_folder)
-                        logger.save_heightmaps_after_grasp(trainer.iteration, color_heightmap, valid_depth_heightmap, '0')
+                if (nonlocal_variables['grasp_success'] == True) and (nonlocal_variables['primitive_action'] == 'grasp'):
+                    dst_folder = os.path.abspath('heightmap_diff')
+                    logger.copy_recent_heightmap(dst_folder)
+                    
+                    #### ERROR heightmap aftergrasp: Fix herre
+                    aftergrasp_color_img, aftergrasp_depth_img = robot.get_camera_data_main()
+                    aftergrasp_depth_img = aftergrasp_depth_img * robot.cam_depth_scale_main
+                    
+
+                    aftergrasp_color_heightmap, aftergrasp_depth_heightmap = utils.get_heightmap(aftergrasp_color_img, aftergrasp_depth_img, robot.cam_intrinsics_main, robot.cam_pose_main, mainbox_limits, heightmap_resolution)
+                    aftergrasp_color_heightmap = cv2.cvtColor(aftergrasp_color_heightmap, cv2.COLOR_RGB2BGR)
+                    src_folder = os.path.abspath('aftergrasp_log')
+                    aftergrasp_depth_heightmap[np.isnan(aftergrasp_depth_heightmap)] = 0
+
+                    cv2.imwrite(os.path.join(src_folder, 'color_aftergrasp.png'), aftergrasp_color_heightmap)
+                    cv2.imwrite(os.path.join(src_folder, 'color_aftergrasp_img.png'), aftergrasp_color_img)
+
+
+                    logger.save_heightmaps_after_grasp(trainer.iteration, aftergrasp_color_heightmap, aftergrasp_depth_heightmap, '0')
+                    ####### End of code need fixing
+                    
+                    robot.process_after_grasp()
+                
+                # Case in main: grasp 2+ objects and grasp 1 object:
+                if nonlocal_variables['main_or_buffer'] == True:
+                # If grasp success in main and threshold value > 10600, turn workspace to buffer:
+                    if (nonlocal_variables['grasp_success'] == True) and ((robot.threshold_grasp >= 8500) or \
+                                                                          robot.weightVector[2] > 6.5):
+                        print("Grasp 2 or more objects. Starting working in buffer")
+                        robot.move_to(robot.home_buffer_pos, None)
+                        robot.open_gripper()
+                        nonlocal_variables['main_or_buffer'] = False
+                        time.sleep(1)
+
+                    elif (nonlocal_variables['grasp_success'] == True) and ((robot.threshold_grasp < 8500) or \
+                                                                            (robot.weightVector[2] > 4 and robot.weightVector[2] < 6.5)):
+                        print("Grasp 1 object. Placing in final, then back to main")
+                        robot.move_to(robot.home_buffer_pos, None)
+                        robot.move_to(np.array([+0.45, -0.25, 0.3]),None)       #Move to final
+                        robot.open_gripper()
+                        robot.move_to(robot.home_buffer_pos, None)
+                        robot.move_to(robot.home_main_pos, None)
+                        nonlocal_variables['main_or_buffer'] = True
+                
+                # Case in buffer: grasp 2+ objects and grasp 1 object
+                # Do pushing & grasping
+                # Grasp 2+ object: Fail case -> Place objects in buffer again and try again (punish the reward)
+                # Grasp 1 object: Success case -> Move to final, back to buffer anA grasp until the buffer is blank. Then move to main
+                elif nonlocal_variables['main_or_buffer'] == False:
+                    if (nonlocal_variables['grasp_success'] == True) and ((robot.threshold_grasp >= 8500) or \
+                                                                          robot.weightVector[2] > 6.5):
+                        print("Grasp 2+ objects at buffer. Place at buffer and try again")
+                        robot.open_gripper()
+                        nonlocal_variables['main_or_buffer'] = False
+
+                    elif (nonlocal_variables['grasp_success'] == True) and ((robot.threshold_grasp < 8500) or \
+                                                                            (robot.weightVector[2] > 4 and robot.weightVector[2] < 6.5)):
+                        print("Grasp 1 object at buffer. Place to final, then back to buffer")
+                        # if buffer_blank == True:      # If there is no more object in buffer 
+                                                        # -> Task complete, place the last one to final and back to main
+                        robot.move_to(np.array([+0.45, -0.25, 0.3]),None)
+                        robot.open_gripper()
+                        robot.move_to(robot.home_buffer_pos, None)
+                        nonlocal_variables['main_or_buffer'] = False
                 nonlocal_variables['executing_action'] = False
-
+                robot.main_workspace = nonlocal_variables['main_or_buffer']
+                #robot.set_new_home = not nonlocal_variables['main_or_buffer']
             time.sleep(0.01)
-    action_thread = threading.Thread(target=process_actions)
+    action_thread = threading.Thread(target=process_actions)        # Minor thread
     action_thread.daemon = True
     action_thread.start()
     exit_called = False
@@ -223,41 +311,66 @@ def main(args):
 
 
     # Start main training/testing loop
+    # This is main Thread
     while True:
         print('\n%s iteration: %d' % ('Testing' if is_testing else 'Training', trainer.iteration))
         iteration_time_0 = time.time()
-
+        
         # Make sure simulation is still stable (if not, reset simulation)
         if is_sim: robot.check_sim()
 
         # Get latest RGB-D image
-        color_img, depth_img = robot.get_camera_data()
-        depth_img = depth_img * robot.cam_depth_scale # Apply depth scale from calibration
+        if nonlocal_variables['main_or_buffer'] == True:
+            logger.save_camera_info(robot.cam_intrinsics_main, robot.cam_pose_main, robot.cam_depth_scale_main) # Save camera intrinsics and pose
+            logger.save_heightmap_info(mainbox_limits, heightmap_resolution) # Save heightmap parameters
+            color_img, depth_img = robot.get_camera_data_main()
+            depth_img = depth_img * robot.cam_depth_scale_main # Apply depth scale from calibration
 
-        # Get heightmap from RGB-D image (by re-projecting 3D point cloud)
-        color_heightmap, depth_heightmap = utils.get_heightmap(color_img, depth_img, robot.cam_intrinsics, robot.cam_pose, mainbox_limits, heightmap_resolution)
-        valid_depth_heightmap = depth_heightmap.copy()
-        valid_depth_heightmap[np.isnan(valid_depth_heightmap)] = 0
+            # Get heightmap from RGB-D image (by re-projecting 3D point cloud)
+            color_heightmap, depth_heightmap = utils.get_heightmap(color_img, depth_img, robot.cam_intrinsics_main, robot.cam_pose_main, mainbox_limits, heightmap_resolution)
+            valid_depth_heightmap = depth_heightmap.copy()
+            valid_depth_heightmap[np.isnan(valid_depth_heightmap)] = 0
+        
+        elif nonlocal_variables['main_or_buffer'] == False:
+            logger.save_camera_info(robot.cam_intrinsics_buffer, robot.cam_pose_buffer, robot.cam_depth_scale_buffer) # Save camera intrinsics and pose
+            logger.save_heightmap_info(bufferbox_limits, heightmap_resolution) # Save heightmap parameters
+            color_img, depth_img = robot.get_camera_data_buffer()
+            depth_img = depth_img * robot.cam_depth_scale_buffer # Apply depth scale from calibration
 
+            # Get heightmap from RGB-D image (by re-projecting 3D point cloud)
+            color_heightmap, depth_heightmap = utils.get_heightmap(color_img, depth_img, robot.cam_intrinsics_buffer, robot.cam_pose_buffer, bufferbox_limits, heightmap_resolution)
+            valid_depth_heightmap = depth_heightmap.copy()
+            valid_depth_heightmap[np.isnan(valid_depth_heightmap)] = 0
+        
         # Save RGB-D images and RGB-D heightmaps
         logger.save_images(trainer.iteration, color_img, depth_img, '0')
         logger.save_heightmaps(trainer.iteration, color_heightmap, valid_depth_heightmap, '0')
 
         # Reset simulation or pause real-world training if table is empty
         stuff_count = np.zeros(valid_depth_heightmap.shape)
-        stuff_count[valid_depth_heightmap > 0.02] = 1
+        stuff_count[valid_depth_heightmap > 0.01] = 1
         empty_threshold = 300
         if (is_sim == True) and (is_testing == True):
             empty_threshold = 10
-            print("Threshold value = " % (np.sum(stuff_count)))
+
         if np.sum(stuff_count) < empty_threshold or (is_sim and no_change_count[0] + no_change_count[1] > 10):
             no_change_count = [0, 0]
-            if is_sim == True:
-                print('Not enough objects in view (value: %d)! Repositioning objects.' % (np.sum(stuff_count)))
+            print("Threshold value = " % (np.sum(stuff_count)))
+            
+            # If main is blank, restart sim
+            if (is_sim == True) and (nonlocal_variables['main_or_buffer'] == True):
+                print('Main is blank (value: %d)! Repositioning objects.' % (np.sum(stuff_count)))
                 robot.restart_sim()
                 robot.add_objects()
                 if is_testing: # If at end of test run, re-load original weights (before test run)
                     trainer.model.load_state_dict(torch.load(snapshot_file))
+            
+            # If buffer is blank, return to main.
+            elif (is_sim == True) and (nonlocal_variables['main_or_buffer'] == False):
+                print('Buffer is blank (value: %d)! Returning to main.' % (np.sum(stuff_count)))
+                robot.move_to_main()
+                nonlocal_variables['main_or_buffer'] = True # Change workspace to main
+
             else:
                 # print('Not enough stuff on the table (value: %d)! Pausing for 30 seconds.' % (np.sum(stuff_count)))
                 # time.sleep(30)
@@ -271,6 +384,8 @@ def main(args):
             continue
         else:
             print("Num obj in view: %d" % (np.sum(stuff_count)))
+
+        robot.main_workspace = nonlocal_variables['main_or_buffer']
 
         if not exit_called:
 
